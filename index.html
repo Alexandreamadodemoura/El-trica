@@ -343,9 +343,25 @@
 
   /* Print */
   @media print {
-    header, .steps, .actions, .tabs { display: none; }
-    .card { box-shadow: none; page-break-inside: avoid; }
-    body { background: white; }
+    header, .steps, .actions, .tabs, .btn-add, .btn-danger, .btn-secondary,
+    button:not(.no-hide-print) { display: none !important; }
+    .card { box-shadow: none; break-inside: auto; }
+    .card.etapa { display: block !important; } /* show ALL etapas */
+    .card.etapa[data-etapa="1"],
+    .card.etapa[data-etapa="2"],
+    .card.etapa[data-etapa="3"] { display: none !important; } /* hide input steps */
+    body { background: white; font-size: 12px; }
+    .container { max-width: 100%; padding: 0 10px; }
+    #diagrama-container { break-inside: avoid; page-break-before: always; }
+    #diagrama-container svg { max-width: 100%; height: auto; }
+    #diagrama-obra-container { break-inside: avoid; }
+    #diagrama-obra-container svg { max-width: 100%; height: auto; }
+    .stats { break-inside: avoid; }
+    table { break-inside: auto; font-size: 11px; }
+    tr { break-inside: avoid; }
+    .box-info, .box-warn, .box-ok, .box-fail { break-inside: avoid; }
+    h3 { break-after: avoid; }
+    .eq { break-inside: avoid; }
   }
 </style>
 </head>
@@ -384,11 +400,10 @@
       <div class="field">
         <label>Tensão de alimentação (V)</label>
         <select id="proj-tensao">
-          <option value="220">220 V — bifásico</option>
-          <option value="127">127 V — monofásico</option>
-          <option value="380">380 V — trifásico</option>
+          <option value="220">220 V — bifásico / trifásico (fase-fase)</option>
+          <option value="127">127 V — monofásico (fase-neutro)</option>
         </select>
-        <div class="hint">No Paraná o padrão Copel mais comum é 220 V bifásico</div>
+        <div class="hint">No Paraná (Copel) o padrão é 220 V fase-fase. Sistema trifásico também opera em 220 V entre fases.</div>
       </div>
       <div class="field">
         <label>Fator de conversão ANEEL</label>
@@ -1280,6 +1295,220 @@ function escape_(s) {
 }
 
 /* ============================================================
+   DIAGRAMA DE MONTAGEM — versão para o eletricista
+   Mostra: fases (S/T), cores dos condutores, nº de fios,
+   barramentos N e PE separados, posição física no QD
+   ============================================================ */
+function gerarDiagramaMontagem(r) {
+  const circs = r.circuitos;
+  const reservas = r.nReservas;
+  const todos = [
+    ...circs,
+    ...Array.from({length: reservas}, (_, i) => ({
+      id: `R${i+1}`, nome: "Reserva", potencia: 0, corrente: 0,
+      bitola: 2.5, disjuntor: 10, tipo: "reserva", aprovado: true
+    }))
+  ];
+  const nLinhas = todos.length;
+
+  // Distribuição de fases (S e T alternadas para equilíbrio)
+  const V = state.projeto.tensao;
+  const bifasico = V === 220; // 220V = bifásico ou trifásico (fase-fase)
+  let faseIdx = 0;
+  todos.forEach(c => {
+    if (c.tipo === "reserva") { c.fase = "—"; c.corFase = "#9ca3af"; return; }
+    // TUE de alta potência (>10A) → bifásico (S+T)
+    if (bifasico && c.corrente > 10) {
+      c.fase = "S+T"; c.corFase = "#7c3aed"; // roxo para bifásico
+    } else {
+      c.fase = faseIdx % 2 === 0 ? "S" : "T";
+      c.corFase = c.fase === "S" ? "#1f2937" : "#dc2626"; // preto=S, vermelho=T
+      faseIdx++;
+    }
+  });
+
+  // Dimensões SVG
+  const W = 820;
+  const rowH = 62;
+  const headerH = 180;
+  const legendH = 120;
+  const H = headerH + nLinhas * rowH + legendH + 40;
+
+  // Posições X
+  const xSlot = 30;     // nº do slot
+  const xFase = 65;     // indicação de fase
+  const xDisj = 110;    // disjuntor
+  const xFios = 175;    // linhas de fios coloridas
+  const xInfo = 360;    // caixa de info do circuito
+  const xBarN = 740;    // barramento neutro
+  const xBarPE = 785;   // barramento terra
+
+  let svg = `<svg viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">`;
+
+  // ---- Background ----
+  svg += `<rect width="${W}" height="${H}" fill="white" rx="8"/>`;
+
+  // ---- Título ----
+  svg += `<text x="${W/2}" y="24" text-anchor="middle" font-size="15" font-weight="700" fill="#1a3a5c">DIAGRAMA DE MONTAGEM — QUADRO DE DISTRIBUIÇÃO</text>`;
+  svg += `<text x="${W/2}" y="42" text-anchor="middle" font-size="11" fill="#6b7280">${escape_(state.projeto.nome || "Projeto")} — ${escape_(state.projeto.cidade || "")} — ${V} V — NBR 5410:2004</text>`;
+
+  // ---- Dispositivos de proteção geral ----
+  const yProt = 60;
+  // DPS
+  svg += `<rect x="30" y="${yProt}" width="90" height="28" rx="4" fill="#dbeafe" stroke="#2563a8" stroke-width="1.2"/>`;
+  svg += `<text x="75" y="${yProt+18}" text-anchor="middle" font-size="11" font-weight="600" fill="#1a3a5c">DPS 175V 8kA</text>`;
+  // DR
+  svg += `<rect x="140" y="${yProt}" width="100" height="28" rx="4" fill="#dbeafe" stroke="#2563a8" stroke-width="1.2"/>`;
+  svg += `<text x="190" y="${yProt+18}" text-anchor="middle" font-size="11" font-weight="600" fill="#1a3a5c">DR 30mA</text>`;
+  // Disj Geral
+  svg += `<rect x="260" y="${yProt}" width="120" height="28" rx="4" fill="#1a3a5c" stroke="#1a3a5c" stroke-width="1.2"/>`;
+  svg += `<text x="320" y="${yProt+18}" text-anchor="middle" font-size="11" font-weight="700" fill="white">Disj. Geral ${r.disjuntorGeral} A</text>`;
+  // setas
+  svg += `<line x1="120" y1="${yProt+14}" x2="140" y2="${yProt+14}" stroke="#1f2937" stroke-width="1.5"/>`;
+  svg += `<line x1="240" y1="${yProt+14}" x2="260" y2="${yProt+14}" stroke="#1f2937" stroke-width="1.5"/>`;
+
+  // ---- Barramentos horizontais ----
+  const yBar = yProt + 46;
+  // Fase S
+  svg += `<line x1="30" y1="${yBar}" x2="${xBarN-10}" y2="${yBar}" stroke="#1f2937" stroke-width="3"/>`;
+  svg += `<text x="18" y="${yBar+4}" font-size="10" font-weight="700" fill="#1f2937">S</text>`;
+  // Fase T
+  svg += `<line x1="30" y1="${yBar+14}" x2="${xBarN-10}" y2="${yBar+14}" stroke="#dc2626" stroke-width="3"/>`;
+  svg += `<text x="18" y="${yBar+18}" font-size="10" font-weight="700" fill="#dc2626">T</text>`;
+  // Neutro
+  svg += `<line x1="${xBarN}" y1="${yBar-6}" x2="${xBarN}" y2="${H - legendH - 10}" stroke="#2563eb" stroke-width="3"/>`;
+  svg += `<text x="${xBarN}" y="${yBar-10}" text-anchor="middle" font-size="9" font-weight="700" fill="#2563eb">N</text>`;
+  // Terra PE
+  svg += `<line x1="${xBarPE}" y1="${yBar-6}" x2="${xBarPE}" y2="${H - legendH - 10}" stroke="#15803d" stroke-width="3"/>`;
+  svg += `<text x="${xBarPE}" y="${yBar-10}" text-anchor="middle" font-size="9" font-weight="700" fill="#15803d">PE</text>`;
+
+  // ---- Cabeçalho da tabela ----
+  const yHead = headerH - 16;
+  svg += `<text x="${xSlot}" y="${yHead}" font-size="9" font-weight="600" fill="#6b7280">Slot</text>`;
+  svg += `<text x="${xFase}" y="${yHead}" font-size="9" font-weight="600" fill="#6b7280">Fase</text>`;
+  svg += `<text x="${xDisj}" y="${yHead}" font-size="9" font-weight="600" fill="#6b7280">Disj.</text>`;
+  svg += `<text x="${xFios}" y="${yHead}" font-size="9" font-weight="600" fill="#6b7280">Condutores (cores)</text>`;
+  svg += `<text x="${xInfo}" y="${yHead}" font-size="9" font-weight="600" fill="#6b7280">Circuito</text>`;
+
+  // ---- Linhas dos circuitos ----
+  todos.forEach((c, i) => {
+    const y = headerH + i * rowH + rowH / 2;
+    const yTop = headerH + i * rowH;
+
+    // fundo alternado
+    if (i % 2 === 0) {
+      svg += `<rect x="0" y="${yTop}" width="${W}" height="${rowH}" fill="#f8fafc"/>`;
+    }
+
+    // Slot number
+    svg += `<text x="${xSlot+8}" y="${y+4}" text-anchor="middle" font-size="13" font-weight="700" fill="#1a3a5c">${i+1}</text>`;
+
+    // Fase indicator (colored circle + label)
+    const faseLabel = c.fase || "—";
+    const faseCor = c.corFase || "#9ca3af";
+    svg += `<circle cx="${xFase+10}" cy="${y}" r="10" fill="${faseCor}" opacity="0.15"/>`;
+    svg += `<text x="${xFase+10}" y="${y+4}" text-anchor="middle" font-size="10" font-weight="700" fill="${faseCor}">${faseLabel}</text>`;
+
+    // Disjuntor box
+    const disjCor = c.tipo === "tue" ? "#d97706" : c.tipo === "reserva" ? "#9ca3af" : "#2563a8";
+    svg += `<rect x="${xDisj}" y="${y-12}" width="48" height="24" rx="3" fill="white" stroke="${disjCor}" stroke-width="1.3"/>`;
+    svg += `<text x="${xDisj+24}" y="${y+4}" text-anchor="middle" font-size="11" font-weight="600" fill="${disjCor}">${c.disjuntor} A</text>`;
+
+    // Conductor lines (colored wires)
+    const xWireStart = xFios;
+    const xWireEnd = xInfo - 15;
+    const bitLabel = `${c.bitola} mm²`;
+
+    if (c.tipo === "reserva") {
+      // dashed gray line
+      svg += `<line x1="${xWireStart}" y1="${y}" x2="${xWireEnd}" y2="${y}" stroke="#d1d5db" stroke-width="1.5" stroke-dasharray="6,4"/>`;
+      svg += `<text x="${(xWireStart+xWireEnd)/2}" y="${y-8}" text-anchor="middle" font-size="9" fill="#9ca3af">${bitLabel} — reserva</text>`;
+    } else {
+      // Fase wire
+      const faseColor = faseLabel === "S" ? "#1f2937" : faseLabel === "T" ? "#dc2626" : "#7c3aed";
+      const nCondutores = faseLabel === "S+T" ? 4 : 3; // S+T+N+PE ou F+N+PE
+
+      // Draw wires
+      const wireSpacing = 6;
+      const yF1 = y - wireSpacing;
+      const yN  = y;
+      const yPE = y + wireSpacing;
+
+      if (faseLabel === "S+T") {
+        const yF2 = y - wireSpacing * 1.5;
+        const yF1b = y - wireSpacing * 0.5;
+        // Fase S (preto)
+        svg += `<line x1="${xWireStart}" y1="${yF2}" x2="${xWireEnd}" y2="${yF2}" stroke="#1f2937" stroke-width="2"/>`;
+        // Fase T (vermelho)
+        svg += `<line x1="${xWireStart}" y1="${yF1b}" x2="${xWireEnd}" y2="${yF1b}" stroke="#dc2626" stroke-width="2"/>`;
+        // Neutro (azul)
+        svg += `<line x1="${xWireStart}" y1="${y + wireSpacing*0.5}" x2="${xWireEnd}" y2="${y + wireSpacing*0.5}" stroke="#2563eb" stroke-width="2"/>`;
+        // Terra (verde)
+        svg += `<line x1="${xWireStart}" y1="${y + wireSpacing*1.5}" x2="${xWireEnd}" y2="${y + wireSpacing*1.5}" stroke="#15803d" stroke-width="2"/>`;
+        // Cross mark for conductor count
+        const xMid = (xWireStart + xWireEnd) / 2;
+        svg += `<line x1="${xMid-3}" y1="${yF2-5}" x2="${xMid+3}" y2="${y+wireSpacing*1.5+5}" stroke="#6b7280" stroke-width="0.8"/>`;
+        svg += `<text x="${xMid+8}" y="${yF2-6}" font-size="8" fill="#6b7280">4</text>`;
+        // bitola label
+        svg += `<text x="${xWireEnd-2}" y="${yF2-6}" text-anchor="end" font-size="8.5" font-weight="600" fill="#374151">${bitLabel}</text>`;
+      } else {
+        // Fase (preto ou vermelho)
+        svg += `<line x1="${xWireStart}" y1="${yF1}" x2="${xWireEnd}" y2="${yF1}" stroke="${faseColor}" stroke-width="2"/>`;
+        // Neutro (azul)
+        svg += `<line x1="${xWireStart}" y1="${yN}" x2="${xWireEnd}" y2="${yN}" stroke="#2563eb" stroke-width="2"/>`;
+        // Terra (verde)
+        svg += `<line x1="${xWireStart}" y1="${yPE}" x2="${xWireEnd}" y2="${yPE}" stroke="#15803d" stroke-width="2"/>`;
+        // Cross mark for conductor count
+        const xMid = (xWireStart + xWireEnd) / 2;
+        svg += `<line x1="${xMid-3}" y1="${yF1-5}" x2="${xMid+3}" y2="${yPE+5}" stroke="#6b7280" stroke-width="0.8"/>`;
+        svg += `<text x="${xMid+8}" y="${yF1-6}" font-size="8" fill="#6b7280">3</text>`;
+        // bitola label
+        svg += `<text x="${xWireEnd-2}" y="${yF1-6}" text-anchor="end" font-size="8.5" font-weight="600" fill="#374151">${bitLabel}</text>`;
+      }
+
+      // Connection dots to N and PE bars
+      svg += `<circle cx="${xBarN}" cy="${y}" r="3" fill="#2563eb"/>`;
+      svg += `<circle cx="${xBarPE}" cy="${y}" r="3" fill="#15803d"/>`;
+    }
+
+    // Circuit info box
+    const boxCor = c.tipo === "tue" ? "#d97706" : c.tipo === "reserva" ? "#d1d5db" : "#2563a8";
+    const boxW = xBarN - xInfo - 30;
+    svg += `<rect x="${xInfo}" y="${y-16}" width="${boxW}" height="32" rx="4" fill="white" stroke="${boxCor}" stroke-width="1.2"/>`;
+    svg += `<text x="${xInfo+8}" y="${y-2}" font-size="11" font-weight="700" fill="#1a3a5c">${escape_(c.id)} — ${escape_(c.nome)}</text>`;
+    if (c.potencia > 0) {
+      svg += `<text x="${xInfo+8}" y="${y+12}" font-size="9" fill="#6b7280">${fmt(c.potencia, 0)} ${c.tipo==='tue'?'W':'VA'} | ${fmt(c.corrente,1)} A | Eletroduto: ${c.tipo==='tue'?'exclusivo':'principal'}</text>`;
+    }
+  });
+
+  // ---- Legenda ----
+  const yLeg = H - legendH + 10;
+  svg += `<rect x="20" y="${yLeg}" width="${W-40}" height="${legendH - 20}" rx="6" fill="#f1f5f9" stroke="#e2e8f0" stroke-width="1"/>`;
+  svg += `<text x="36" y="${yLeg+18}" font-size="11" font-weight="700" fill="#1a3a5c">LEGENDA — CORES DOS CONDUTORES (NBR 5410:2004)</text>`;
+
+  const legItems = [
+    { cor: "#1f2937", label: "Fase S — PRETO" },
+    { cor: "#dc2626", label: "Fase T — VERMELHO" },
+    { cor: "#2563eb", label: "Neutro (N) — AZUL CLARO" },
+    { cor: "#15803d", label: "Terra (PE) — VERDE" },
+    { cor: "#7c3aed", label: "Bifásico (S+T) — ver cores individuais" },
+  ];
+  legItems.forEach((item, i) => {
+    const lx = 36 + (i % 3) * 250;
+    const ly = yLeg + 36 + Math.floor(i / 3) * 22;
+    svg += `<line x1="${lx}" y1="${ly}" x2="${lx+20}" y2="${ly}" stroke="${item.cor}" stroke-width="3"/>`;
+    svg += `<text x="${lx+26}" y="${ly+4}" font-size="10" fill="#374151">${item.label}</text>`;
+  });
+
+  // Conductor count notation
+  svg += `<text x="36" y="${yLeg + 82}" font-size="9" fill="#6b7280">Traço oblíquo sobre os fios = nº de condutores no circuito (3 = F+N+PE; 4 = F1+F2+N+PE)</text>`;
+  svg += `<text x="36" y="${yLeg + 94}" font-size="9" fill="#6b7280">● = ponto de conexão no barramento (N = neutro azul / PE = terra verde)</text>`;
+
+  svg += `</svg>`;
+  return svg;
+}
+
+/* ============================================================
    ETAPA 5: GUIA DE OBRA
    ============================================================ */
 function renderObra(r) {
@@ -1357,12 +1586,18 @@ function renderObra(r) {
       <div>6. Disjuntor geral instalado dentro do QD e acessível</div>
     </div>
 
+    <h3>⚡ Diagrama de montagem — para o eletricista</h3>
+    <p class="desc" style="margin-bottom:8px;">Este diagrama mostra a montagem prática do quadro de distribuição: fases (S/T), cores dos condutores, quantidade de fios por circuito e conexões nos barramentos.</p>
+    <div id="diagrama-obra-container">
+      ${gerarDiagramaMontagem(r)}
+    </div>
+
     <h3>📐 Resumo executivo para a ART</h3>
     <table>
       <tbody>
         <tr><td class="bold">Projeto</td><td>${state.projeto.nome || "—"}</td></tr>
         <tr><td class="bold">Local</td><td>${state.projeto.cidade || "—"}</td></tr>
-        <tr><td class="bold">Tensão de alimentação</td><td>${state.projeto.tensao} V</td></tr>
+        <tr><td class="bold">Tensão de alimentação</td><td>${state.projeto.tensao} V (${state.projeto.tensao === 220 ? 'bifásico/trifásico — fase-fase' : 'monofásico — fase-neutro'})</td></tr>
         <tr><td class="bold">Carga instalada</td><td>${fmt(r.potTotal/1000, 2)} kVA / ${fmt(r.potTotalKW, 2)} kW</td></tr>
         <tr><td class="bold">Demanda calculada</td><td>${fmt(r.dTotal, 2)} kVA / ${fmt(r.cargaKW, 2)} kW</td></tr>
         <tr><td class="bold">Corrente do disjuntor geral</td><td>${r.disjuntorGeral} A</td></tr>
